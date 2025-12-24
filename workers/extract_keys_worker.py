@@ -6,27 +6,43 @@
 """
 
 import os
-from PyQt6.QtCore import QThread, pyqtSignal
+from PyQt6.QtCore import pyqtSignal
 from models.localization_parser import LocalizationParser
-from models.project_info import ProjectInfoExtractor
+from workers.base_worker import BaseWorker
+from PyQt6.QtCore import pyqtSignal
 
 
-class ExtractKeysWorker(QThread):
+class ExtractKeysWorker(BaseWorker):
     """提取 Key 的后台线程"""
-    
-    progress = pyqtSignal(str)
     finished = pyqtSignal(bool, str, list)  # success, message, keys
     
     def __init__(self, project_path: str, language: str):
-        super().__init__()
-        self.project_path = project_path
+        super().__init__(project_path)
         self.language = language
+    
+    def validate_inputs(self) -> bool:
+        """验证输入参数"""
+        if not super().validate_project_path():
+            self.finished.emit(False, "项目路径无效", [])
+            return False
+        
+        if not self.language or not self.language.strip():
+            self.finished.emit(False, "语言代码不能为空", [])
+            return False
+        
+        return True
     
     def run(self):
         """执行提取"""
         try:
+            if not self.validate_inputs():
+                return
+            
             # 查找指定语言的 .lproj 文件夹
-            lproj_folders = ProjectInfoExtractor.find_lproj_folders(self.project_path)
+            lproj_folders = self.find_lproj_folders()
+            if lproj_folders is None:
+                self.finished.emit(False, "项目中未找到 .lproj 文件夹", [])
+                return
             
             if self.language not in lproj_folders:
                 self.finished.emit(False, f"未找到语言 '{self.language}' 的文件夹", [])
@@ -63,4 +79,5 @@ class ExtractKeysWorker(QThread):
             self.finished.emit(True, f"成功提取 {len(keys)} 个 key", keys)
             
         except Exception as e:
-            self.finished.emit(False, f"提取失败: {str(e)}", [])
+            error_msg = self.emit_error("提取", e)
+            self.finished.emit(False, error_msg, [])

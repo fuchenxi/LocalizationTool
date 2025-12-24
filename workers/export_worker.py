@@ -9,43 +9,54 @@ import zipfile
 import tempfile
 import shutil
 from datetime import datetime
-from PyQt6.QtCore import QThread, pyqtSignal
+from typing import List
+from PyQt6.QtCore import pyqtSignal
 from collections import OrderedDict
 
-from models import ProjectInfoExtractor, LocalizationParser
+from models import LocalizationParser
+from workers.base_worker import BaseWorker
+from utils.config import ConfigManager
+from PyQt6.QtCore import pyqtSignal
 
 
-class ExportWorker(QThread):
+class ExportWorker(BaseWorker):
     """导出工作线程"""
-    progress = pyqtSignal(str)
     finished = pyqtSignal(bool, str, str)  # success, message, zip_path
     
-    def __init__(self, project_path: str, export_strings: bool, export_xml: bool, key_list: list = None):
-        super().__init__()
-        self.project_path = project_path
+    def __init__(self, project_path: str, export_strings: bool, export_xml: bool, 
+                 key_list: list = None, ignore_folders: List[str] = None):
+        super().__init__(project_path, ignore_folders)
         self.export_strings = export_strings
         self.export_xml = export_xml
         self.key_list = key_list or []  # 如果提供 key_list，只导出指定的 key
+        self.temp_dir = None
     
     def run(self):
         try:
+            if not self.validate_project_path():
+                self.finished.emit(False, "项目路径无效", "")
+                return
+            
             # 1. 查找项目中的 .lproj 文件夹
             self.progress.emit("正在查找项目语言文件...")
-            lproj_folders = ProjectInfoExtractor.find_lproj_folders(self.project_path)
-            
-            if not lproj_folders:
+            lproj_folders = self.find_lproj_folders()
+            if lproj_folders is None:
                 self.finished.emit(False, "项目中未找到 .lproj 文件夹", "")
                 return
             
             self.progress.emit(f"✓ 找到 {len(lproj_folders)} 个语言文件夹")
             
             # 2. 创建临时目录
-            temp_dir = tempfile.mkdtemp()
+            self.temp_dir = tempfile.mkdtemp()
             try:
                 # 3. 读取每个语言的多语言数据
                 language_data = {}  # {lang_code: OrderedDict}
                 
                 for lang_code, lproj_path in lproj_folders.items():
+                    if self.check_stopped():
+                        self.finished.emit(False, "操作已取消", "")
+                        return
+                    
                     self.progress.emit(f"正在读取 {lang_code} 语言...")
                     
                     # 查找 Localizable.strings 文件
@@ -91,10 +102,14 @@ class ExportWorker(QThread):
                 strings_dir = None
                 if self.export_strings or self.export_xml:
                     self.progress.emit("\n正在导出 .strings 格式...")
-                    strings_dir = os.path.join(temp_dir, "Strings")
+                    strings_dir = os.path.join(self.temp_dir, "Strings")
                     os.makedirs(strings_dir, exist_ok=True)
                     
                     for lang_code, data in language_data.items():
+                        if self.check_stopped():
+                            self.finished.emit(False, "操作已取消", "")
+                            return
+                        
                         output_file = os.path.join(strings_dir, f"{lang_code}.strings")
                         LocalizationParser.write_strings_file(output_file, data)
                         self.progress.emit(f"✓ 已导出: {lang_code}.strings")
@@ -102,11 +117,15 @@ class ExportWorker(QThread):
                 # 如果选择了 XML，根据导出的 .strings 文件导出 XML
                 if self.export_xml:
                     self.progress.emit("\n正在根据 .strings 文件导出 .xml 格式...")
-                    xml_dir = os.path.join(temp_dir, "XML")
+                    xml_dir = os.path.join(self.temp_dir, "XML")
                     os.makedirs(xml_dir, exist_ok=True)
                     
                     # 从导出的 .strings 文件读取数据，然后导出为 XML
                     for lang_code in language_data.keys():
+                        if self.check_stopped():
+                            self.finished.emit(False, "操作已取消", "")
+                            return
+                        
                         strings_file = os.path.join(strings_dir, f"{lang_code}.strings")
                         if os.path.exists(strings_file):
                             # 从 .strings 文件读取数据
@@ -120,13 +139,16 @@ class ExportWorker(QThread):
                 self.progress.emit("\n正在打包...")
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 zip_filename = f"LocalizationExport_{timestamp}.zip"
-                zip_path = os.path.join(os.path.expanduser("~/Desktop"), zip_filename)
+                
+                # 使用配置的导出路径
+                export_path = ConfigManager.get_export_path()
+                zip_path = os.path.join(export_path, zip_filename)
                 
                 with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-                    for root, dirs, files in os.walk(temp_dir):
+                    for root, dirs, files in os.walk(self.temp_dir):
                         for file in files:
                             file_path = os.path.join(root, file)
-                            arcname = os.path.relpath(file_path, temp_dir)
+                            arcname = os.path.relpath(file_path, self.temp_dir)
                             zipf.write(file_path, arcname)
                 
                 self.progress.emit(f"✓ 导出完成: {zip_filename}")
@@ -144,8 +166,19 @@ class ExportWorker(QThread):
                 
             finally:
                 # 清理临时目录
-                shutil.rmtree(temp_dir)
+                if self.temp_dir and os.path.exists(self.temp_dir):
+                    try:
+                        shutil.rmtree(self.temp_dir)
+                    except Exception as e:
+                        print(f"清理临时目录失败: {e}")
                 
         except Exception as e:
-            self.finished.emit(False, f"导出失败: {str(e)}", "")
+            error_msg = self.emit_error("导出", e)
+            self.finished.emit(False, error_msg, "")
+            # 确保清理临时目录
+            if self.temp_dir and os.path.exists(self.temp_dir):
+                try:
+                    shutil.rmtree(self.temp_dir)
+                except:
+                    pass
 

@@ -7,29 +7,42 @@
 
 import os
 from typing import Dict, List
-from PyQt6.QtCore import QThread, pyqtSignal
+from PyQt6.QtCore import pyqtSignal
 
-from models import ProjectInfoExtractor, LocalizationParser
+from models import LocalizationParser
+from workers.base_worker import BaseWorker
+from PyQt6.QtCore import pyqtSignal
 
 
-class CompareWorker(QThread):
+class CompareWorker(BaseWorker):
     """对比工作线程"""
-    progress = pyqtSignal(str)
     finished = pyqtSignal(bool, str, dict)  # success, message, missing_keys
     
     def __init__(self, project_path: str, base_lang: str, ignore_folders: List[str] = None):
-        super().__init__()
-        self.project_path = project_path
+        super().__init__(project_path, ignore_folders)
         self.base_lang = base_lang
-        self.ignore_folders = ignore_folders
+    
+    def validate_inputs(self) -> bool:
+        """验证输入参数"""
+        if not super().validate_project_path():
+            self.finished.emit(False, "项目路径无效", {})
+            return False
+        
+        if not self.base_lang or not self.base_lang.strip():
+            self.finished.emit(False, "基准语言不能为空", {})
+            return False
+        
+        return True
     
     def run(self):
         try:
+            if not self.validate_inputs():
+                return
+            
             # 1. 查找所有 .lproj 文件夹
             self.progress.emit("正在查找语言文件夹...")
-            lproj_folders = ProjectInfoExtractor.find_lproj_folders(self.project_path, self.ignore_folders)
-            
-            if not lproj_folders:
+            lproj_folders = self.find_lproj_folders()
+            if lproj_folders is None:
                 self.finished.emit(False, "项目中未找到 .lproj 文件夹", {})
                 return
             
@@ -59,6 +72,10 @@ class CompareWorker(QThread):
             missing_keys = {}  # {lang_code: [key1, key2, ...]}
             
             for lang_code, lproj_path in lproj_folders.items():
+                if self.check_stopped():
+                    self.finished.emit(False, "操作已取消", {})
+                    return
+                
                 # 跳过基准语言本身（不区分大小写）
                 if lang_code.lower() == self.base_lang.lower():
                     continue
@@ -99,5 +116,6 @@ class CompareWorker(QThread):
             self.finished.emit(True, message, missing_keys)
             
         except Exception as e:
-            self.finished.emit(False, f"对比失败: {str(e)}", {})
+            error_msg = self.emit_error("对比", e)
+            self.finished.emit(False, error_msg, {})
 

@@ -1,0 +1,31 @@
+# Python 字节码
+__pycache__/
+*.py[cod]
+*$py.class
+
+# 虚拟环境
+venv/
+env/
+.venv/
+.env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# 构建产物
+build/
+dist/
+*.egg-info/
+
+# 日志和临时文件
+*.log
+*.tmp
+
+# 打包文件
+*.zip
+*.tar.gz
+

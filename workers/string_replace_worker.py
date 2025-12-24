@@ -7,26 +7,57 @@
 import os
 import re
 from typing import List, Dict
-from PyQt6.QtCore import QThread, pyqtSignal
+from PyQt6.QtCore import pyqtSignal
 
 from models import LocalizationParser, ProjectInfoExtractor
+from workers.base_worker import BaseWorker
+from utils.constants import PROGRESS_REPORT_INTERVAL
+from PyQt6.QtCore import pyqtSignal
 
 
-class ScanStringsWorker(QThread):
+class ScanStringsWorker(BaseWorker):
     """扫描硬编码字符串工作线程"""
-    progress = pyqtSignal(str)
     finished = pyqtSignal(bool, str, list, list)  # success, message, results, mismatched_keys
     
-    def __init__(self, project_path: str, keys: List[str], scan_oc: bool, scan_swift: bool, case_sensitive: bool = False):
-        super().__init__()
-        self.project_path = project_path
-        self.keys = keys
+    # 多语言函数调用模式（预编译以提高性能）
+    LOCALIZED_PATTERNS = [
+        # OC 函数调用: FunctionName(@"value")
+        re.compile(r'(?:Localized|LocaRemoveTaglized|enLocalized|D_Localized|D_enLocalized)\s*\(\s*@"([^"]*)"\s*\)'),
+        # Swift 函数调用: FunctionName("value")
+        re.compile(r'(?:Localized|locaRemoveTaglized|D_Localized|LocalizedFormat)\s*\(\s*"([^"]*)"\s*[,\)]'),
+        # Swift 属性语法: "value".localized
+        re.compile(r'"([^"]*)"\s*\.\s*localized'),
+    ]
+    
+    def __init__(self, project_path: str, keys: List[str], scan_oc: bool, scan_swift: bool, 
+                 case_sensitive: bool = False, ignore_folders: List[str] = None):
+        super().__init__(project_path, ignore_folders)
+        self.keys = keys or []
         self.scan_oc = scan_oc
         self.scan_swift = scan_swift
         self.case_sensitive = case_sensitive
     
+    def validate_inputs(self) -> bool:
+        """验证输入参数"""
+        if not super().validate_project_path():
+            self.finished.emit(False, "项目路径无效", [], [])
+            return False
+        
+        if not self.keys:
+            self.finished.emit(False, "Key 列表不能为空", [], [])
+            return False
+        
+        if not self.scan_oc and not self.scan_swift:
+            self.finished.emit(False, "请至少选择一种文件类型", [], [])
+            return False
+        
+        return True
+    
     def run(self):
         try:
+            if not self.validate_inputs():
+                return
+            
             # 1. 从多语言文件中建立 value -> key 的映射
             self.progress.emit("正在读取多语言文件...")
             value_to_key_map, mismatched_keys = self.build_value_key_map()
@@ -50,22 +81,22 @@ class ScanStringsWorker(QThread):
             if self.scan_swift:
                 extensions.append('.swift')
             
-            if not extensions:
-                self.finished.emit(False, "请至少选择一种文件类型", [])
-                return
-            
             # 扫描文件
             file_count = 0
             for root, dirs, files in os.walk(self.project_path):
+                if self.check_stopped():
+                    self.finished.emit(False, "操作已取消", [], mismatched_keys)
+                    return
+                
                 # 排除无关目录
-                dirs[:] = [d for d in dirs if d not in ['Pods', 'build', 'Build', 'DerivedData', '.git', 'Carthage']]
+                dirs[:] = [d for d in dirs if d not in self.ignore_folders]
                 
                 for file in files:
                     if any(file.endswith(ext) for ext in extensions):
                         file_path = os.path.join(root, file)
                         file_count += 1
                         
-                        if file_count % 10 == 0:
+                        if file_count % PROGRESS_REPORT_INTERVAL == 0:
                             self.progress.emit(f"已扫描 {file_count} 个文件...")
                         
                         # 扫描文件中的字符串
@@ -80,7 +111,8 @@ class ScanStringsWorker(QThread):
                 self.finished.emit(True, "未发现需要替换的硬编码字符串", [], mismatched_keys)
             
         except Exception as e:
-            self.finished.emit(False, f"扫描失败: {str(e)}", [], [])
+            error_msg = self.emit_error("扫描", e)
+            self.finished.emit(False, error_msg, [], [])
     
     def build_value_key_map(self) -> tuple:
         """建立 value -> key 的映射
@@ -96,7 +128,10 @@ class ScanStringsWorker(QThread):
         found_keys = set()
         
         # 查找所有语言文件夹（使用第一个语言文件，通常是英文）
-        lproj_folders = ProjectInfoExtractor.find_lproj_folders(self.project_path)
+        lproj_folders = ProjectInfoExtractor.find_lproj_folders(
+            self.project_path, 
+            self.ignore_folders
+        )
         
         for lang_code, lproj_path in lproj_folders.items():
             strings_file = os.path.join(lproj_path, 'Localizable.strings')
@@ -152,22 +187,10 @@ class ScanStringsWorker(QThread):
             # 相对路径
             relative_path = file_path.replace(self.project_path, "").lstrip(os.sep)
             
-            # 定义要查找的多语言函数调用模式
-            # OC: Localized(@"xxx"), D_Localized(@"xxx") 等
-            # Swift: Localized("xxx"), "xxx".localized 等
-            localized_patterns = [
-                # OC 函数调用: FunctionName(@"value")
-                r'(?:Localized|LocaRemoveTaglized|enLocalized|D_Localized|D_enLocalized)\s*\(\s*@"([^"]*)"\s*\)',
-                # Swift 函数调用: FunctionName("value")
-                r'(?:Localized|locaRemoveTaglized|D_Localized|LocalizedFormat)\s*\(\s*"([^"]*)"\s*[,\)]',
-                # Swift 属性语法: "value".localized
-                r'"([^"]*)"\s*\.\s*localized',
-            ]
-            
             for line_num, line in enumerate(lines, 1):
-                # 使用所有模式匹配
-                for pattern in localized_patterns:
-                    matches = re.finditer(pattern, line)
+                # 使用预编译的正则表达式匹配
+                for pattern in self.LOCALIZED_PATTERNS:
+                    matches = pattern.finditer(line)
                     for match in matches:
                         string_value = match.group(1)
                         
@@ -199,22 +222,32 @@ class ScanStringsWorker(QThread):
                             })
         
         except Exception as e:
-            print(f"扫描文件失败 {file_path}: {e}")
+            # 使用基类的错误处理
+            self.progress.emit(f"⚠ 扫描文件失败 {file_path}: {e}")
         
         return results
 
 
-class ReplaceStringsWorker(QThread):
+class ReplaceStringsWorker(BaseWorker):
     """替换字符串工作线程"""
-    progress = pyqtSignal(str)
-    finished = pyqtSignal(bool, str, int)
+    finished = pyqtSignal(bool, str, int)  # success, message, replaced_count
     
     def __init__(self, results: List[Dict]):
-        super().__init__()
-        self.results = results
+        super().__init__()  # 不需要 project_path
+        self.results = results or []
+    
+    def validate_inputs(self) -> bool:
+        """验证输入参数"""
+        if not self.results:
+            self.finished.emit(False, "替换列表不能为空", 0)
+            return False
+        return True
     
     def run(self):
         try:
+            if not self.validate_inputs():
+                return
+            
             # 按文件分组
             files_to_update = {}
             for item in self.results:
@@ -226,17 +259,38 @@ class ReplaceStringsWorker(QThread):
             replaced_count = 0
             
             for file_path, items in files_to_update.items():
+                if self.check_stopped():
+                    self.finished.emit(False, "操作已取消", 0)
+                    return
+                
                 self.progress.emit(f"正在处理: {os.path.basename(file_path)}")
                 
+                # 检查文件是否存在
+                if not os.path.exists(file_path):
+                    self.progress.emit(f"⚠ 文件不存在: {file_path}")
+                    continue
+                
+                # 检查文件是否可写
+                if not os.access(file_path, os.W_OK):
+                    self.progress.emit(f"⚠ 文件不可写: {file_path}")
+                    continue
+                
                 # 读取文件
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    lines = f.readlines()
+                try:
+                    with open(file_path, 'r', encoding='utf-8') as f:
+                        lines = f.readlines()
+                except Exception as e:
+                    self.progress.emit(f"⚠ 读取文件失败 {file_path}: {e}")
+                    continue
                 
                 # 按行号倒序处理（避免行号偏移）
                 items.sort(key=lambda x: x['line'], reverse=True)
                 
                 for item in items:
                     line_num = item['line'] - 1  # 转为 0-based index
+                    if line_num >= len(lines):
+                        continue
+                    
                     original_value = item['original']
                     key = item['key']
                     
@@ -260,13 +314,18 @@ class ReplaceStringsWorker(QThread):
                     replaced_count += 1
                 
                 # 写回文件
-                with open(file_path, 'w', encoding='utf-8') as f:
-                    f.writelines(lines)
+                try:
+                    with open(file_path, 'w', encoding='utf-8') as f:
+                        f.writelines(lines)
+                except Exception as e:
+                    self.progress.emit(f"⚠ 写入文件失败 {file_path}: {e}")
+                    continue
                 
                 self.progress.emit(f"✓ {os.path.basename(file_path)}: 替换 {len(items)} 处")
             
             self.finished.emit(True, f"成功替换 {replaced_count} 处字符串", replaced_count)
             
         except Exception as e:
-            self.finished.emit(False, f"替换失败: {str(e)}", 0)
+            error_msg = self.emit_error("替换", e)
+            self.finished.emit(False, error_msg, 0)
 

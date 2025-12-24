@@ -73,4 +73,23 @@ class ConfigManager:
         config = ConfigManager.load_config()
         config['last_import_folder'] = path
         ConfigManager.save_config(config)
+    
+    @staticmethod
+    def get_export_path() -> str:
+        """获取导出路径"""
+        from utils.constants import DEFAULT_EXPORT_PATH
+        config = ConfigManager.load_config()
+        path = config.get('export_path', DEFAULT_EXPORT_PATH)
+        
+        # 检查路径是否存在
+        if os.path.exists(path) and os.path.isdir(path):
+            return path
+        return DEFAULT_EXPORT_PATH
+    
+    @staticmethod
+    def save_export_path(path: str):
+        """保存导出路径"""
+        config = ConfigManager.load_config()
+        config['export_path'] = path
+        ConfigManager.save_config(config)
 
