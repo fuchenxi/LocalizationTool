@@ -18,10 +18,12 @@ class ImportWorker(BaseWorker):
     """导入工作线程"""
     finished = pyqtSignal(bool, str)  # success, message
     
-    def __init__(self, zip_path: str, project_path: str, version: str, ignore_folders: list = None):
+    def __init__(self, zip_path: str, project_path: str, version: str, 
+                 language_mappings: dict = None, ignore_folders: list = None):
         super().__init__(project_path, ignore_folders)
         self.zip_path = zip_path
         self.version = version
+        self.language_mappings = language_mappings or {}  # {zip_lang: project_lang}
         self.extract_dir = None
     
     def validate_inputs(self) -> bool:
@@ -90,20 +92,30 @@ class ImportWorker(BaseWorker):
             
             # 4. 导入语言文件
             imported_count = 0
-            for lang_code, strings_file in strings_files.items():
+            for zip_lang, strings_file in strings_files.items():
                 if self.check_stopped():
                     self.finished.emit(False, "操作已取消")
                     return
                 
-                self.progress.emit(f"正在导入 {lang_code} 语言...")
+                # 使用语言映射（如果有的话）
+                if self.language_mappings:
+                    if zip_lang not in self.language_mappings:
+                        self.progress.emit(f"跳过: {zip_lang} (未配置映射)")
+                        continue
+                    project_lang = self.language_mappings[zip_lang]
+                    self.progress.emit(f"正在导入 {zip_lang} → {project_lang}...")
+                else:
+                    # 没有映射时，直接使用 zip 中的语言代码
+                    project_lang = zip_lang
+                    self.progress.emit(f"正在导入 {zip_lang} 语言...")
                 
                 # 查找对应的 .lproj 文件夹
-                if lang_code not in lproj_folders:
-                    self.progress.emit(f"警告: 项目中未找到 {lang_code}.lproj 文件夹，跳过")
+                if project_lang not in lproj_folders:
+                    self.progress.emit(f"警告: 项目中未找到 {project_lang}.lproj 文件夹，跳过")
                     continue
                 
                 # 查找 Localizable.strings 文件
-                target_file = os.path.join(lproj_folders[lang_code], 'Localizable.strings')
+                target_file = os.path.join(lproj_folders[project_lang], 'Localizable.strings')
                 
                 if not os.path.exists(target_file):
                     self.progress.emit(f"警告: {target_file} 不存在，跳过")
@@ -115,7 +127,10 @@ class ImportWorker(BaseWorker):
                 # 只用于统计显示
                 new_data = LocalizationParser.parse_strings_file(strings_file)
                 imported_count += 1
-                self.progress.emit(f"✓ {lang_code} 导入成功 ({len(new_data)} 条)")
+                if self.language_mappings and zip_lang != project_lang:
+                    self.progress.emit(f"✓ {zip_lang} → {project_lang} 导入成功 ({len(new_data)} 条)")
+                else:
+                    self.progress.emit(f"✓ {project_lang} 导入成功 ({len(new_data)} 条)")
             
             # 5. 清理解压目录
             if self.extract_dir and os.path.exists(self.extract_dir):

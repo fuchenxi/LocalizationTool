@@ -20,6 +20,7 @@ from views.export_tab import ExportTab
 from views.compare_tab import CompareTab
 from views.replace_tab import ReplaceTab
 from views.extract_keys_tab import ExtractKeysTab
+from views.language_mapping_dialog import LanguageMappingDialog
 
 from workers import (
     ScanDuplicatesWorker, DeduplicateWorker, ImportWorker,
@@ -117,6 +118,9 @@ class MainWindow(QMainWindow):
         
         # 连接事件
         self.connect_events()
+        
+        # 初始化导入标签页（加载 ZIP 文件列表并启用按钮）
+        self.init_import_tab()
     
     def create_toolbar(self):
         """创建顶部工具栏"""
@@ -247,6 +251,14 @@ class MainWindow(QMainWindow):
         self.extract_keys_tab.copy_btn.clicked.connect(self.copy_extracted_keys)
         self.extract_keys_tab.save_btn.clicked.connect(self.save_extracted_keys)
     
+    def init_import_tab(self):
+        """初始化导入标签页"""
+        # 如果有保存的文件夹路径，加载文件列表并启用按钮
+        if self.import_tab.current_folder and os.path.exists(self.import_tab.current_folder):
+            self.import_tab.load_zip_files()
+            self.import_tab.change_folder_btn.setEnabled(True)
+            self.import_tab.refresh_btn.setEnabled(True)
+    
     def select_project(self):
         """选择项目路径"""
         last_path = ConfigManager.get_last_project_path()
@@ -293,8 +305,12 @@ class MainWindow(QMainWindow):
             
             # 更新显示
             self.info_tab.app_name_label.setText(f"App 名称: {app_info.get('app_name', 'Unknown')}")
-            self.info_tab.version_label.setText(f"版本号: {app_info.get('version', 'Unknown')}")
+            version = app_info.get('version', 'Unknown')
+            self.info_tab.version_label.setText(f"版本号: {version}")
             self.info_tab.bundle_id_label.setText(f"Bundle ID: {app_info.get('bundle_id', 'Unknown')}")
+            
+            # 自动填充导入标签页的版本号
+            self.import_tab.set_version(version)
             
             # 加载图标
             icon_path = ProjectInfoExtractor.find_app_icon(self.project_path)
@@ -432,11 +448,28 @@ class MainWindow(QMainWindow):
         if not zip_path or not self.project_path:
             return
         
-        from datetime import datetime
-        version = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        # 获取项目中的语言列表
+        project_languages = ProjectInfoExtractor.find_lproj_folders(self.project_path)
+        if not project_languages:
+            Toast.show_toast(self, "项目中未找到 .lproj 文件夹", 2000)
+            return
         
-        # 创建 Worker
-        self.import_worker = ImportWorker(zip_path, self.project_path, version)
+        # 弹出语言映射对话框
+        dialog = LanguageMappingDialog(zip_path, project_languages, self)
+        if dialog.exec() != dialog.DialogCode.Accepted:
+            return
+        
+        # 获取映射关系
+        language_mappings = dialog.get_mappings()
+        if not language_mappings:
+            Toast.show_toast(self, "没有配置任何语言映射", 2000)
+            return
+        
+        # 从输入框获取版本号（如果没有输入则使用日期时间）
+        version = self.import_tab.get_version()
+        
+        # 创建 Worker（传入语言映射）
+        self.import_worker = ImportWorker(zip_path, self.project_path, version, language_mappings)
         self.import_worker.progress.connect(self.on_import_progress)
         self.import_worker.finished.connect(self.on_import_finished)
         self.import_worker.start()

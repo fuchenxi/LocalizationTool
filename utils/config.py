@@ -92,4 +92,20 @@ class ConfigManager:
         config = ConfigManager.load_config()
         config['export_path'] = path
         ConfigManager.save_config(config)
+    
+    @staticmethod
+    def get_language_mappings() -> dict:
+        """获取语言映射配置"""
+        config = ConfigManager.load_config()
+        return config.get('language_mappings', {})
+    
+    @staticmethod
+    def save_language_mappings(mappings: dict):
+        """保存语言映射配置（合并到现有配置）"""
+        config = ConfigManager.load_config()
+        existing = config.get('language_mappings', {})
+        # 合并新映射（新的覆盖旧的）
+        existing.update(mappings)
+        config['language_mappings'] = existing
+        ConfigManager.save_config(config)
 

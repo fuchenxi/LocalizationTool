@@ -197,6 +197,42 @@ class ImportTab(QWidget):
         
         layout.addWidget(list_container, 1)  # 给列表更多空间
         
+        # 版本号输入
+        version_container = QWidget()
+        version_container.setStyleSheet(f"""
+            QWidget {{
+                background: {self.colors['bg_card']};
+                border-radius: 8px;
+            }}
+        """)
+        version_layout = QVBoxLayout(version_container)
+        version_layout.setContentsMargins(16, 12, 16, 12)
+        version_layout.setSpacing(8)
+        
+        version_title = QLabel("版本号")
+        version_title.setStyleSheet(f"font-size: 13px; font-weight: 600; color: {self.colors['text_primary']};")
+        version_layout.addWidget(version_title)
+        
+        self.version_input = QLineEdit()
+        self.version_input.setPlaceholderText("例如: v1.2.3 或 1.0.0（留空则使用日期时间）")
+        self.version_input.setFixedHeight(36)
+        self.version_input.setStyleSheet(f"""
+            QLineEdit {{
+                padding: 8px 12px;
+                border: 1px solid {self.colors['border']};
+                border-radius: 6px;
+                background: {self.colors['bg_card']};
+                font-size: 13px;
+                color: {self.colors['text_primary']};
+            }}
+            QLineEdit:focus {{
+                border: 2px solid {self.colors['button_bg']};
+            }}
+        """)
+        version_layout.addWidget(self.version_input)
+        
+        layout.addWidget(version_container)
+        
         # 导入按钮 - 固定在底部，更突出
         button_layout = QHBoxLayout()
         button_layout.addStretch()
@@ -292,4 +328,17 @@ class ImportTab(QWidget):
             path = current_item.data(Qt.ItemDataRole.UserRole)
             return path if path else ""
         return ""
+    
+    def set_version(self, version: str):
+        """设置版本号"""
+        if version and version != 'Unknown':
+            self.version_input.setText(version)
+    
+    def get_version(self) -> str:
+        """获取版本号"""
+        version = self.version_input.text().strip()
+        if not version:
+            # 如果没有输入，使用默认的日期时间格式
+            return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        return version
 
