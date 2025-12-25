@@ -7,6 +7,7 @@ from .string_replace_worker import ScanStringsWorker, ReplaceStringsWorker
 from .export_worker import ExportWorker
 from .compare_worker import CompareWorker
 from .extract_keys_worker import ExtractKeysWorker
+from .length_compare_worker import LengthCompareWorker
 
 __all__ = [
     'BaseWorker',
@@ -17,6 +18,7 @@ __all__ = [
     'ReplaceStringsWorker',
     'ExportWorker',
     'CompareWorker',
-    'ExtractKeysWorker'
+    'ExtractKeysWorker',
+    'LengthCompareWorker'
 ]
 

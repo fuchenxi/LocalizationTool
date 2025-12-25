@@ -18,13 +18,15 @@ from views.deduplicate_tab import DeduplicateTab
 from views.import_tab import ImportTab
 from views.export_tab import ExportTab
 from views.compare_tab import CompareTab
+from views.length_compare_tab import LengthCompareTab
 from views.replace_tab import ReplaceTab
 from views.extract_keys_tab import ExtractKeysTab
 from views.language_mapping_dialog import LanguageMappingDialog
 
 from workers import (
     ScanDuplicatesWorker, DeduplicateWorker, ImportWorker,
-    ExportWorker, CompareWorker, ScanStringsWorker, ReplaceStringsWorker
+    ExportWorker, CompareWorker, ScanStringsWorker, ReplaceStringsWorker,
+    LengthCompareWorker
 )
 from workers.extract_keys_worker import ExtractKeysWorker
 
@@ -92,6 +94,7 @@ class MainWindow(QMainWindow):
         self.import_tab = ImportTab()
         self.export_tab = ExportTab()
         self.compare_tab = CompareTab()
+        self.length_compare_tab = LengthCompareTab()
         self.replace_tab = ReplaceTab()
         self.extract_keys_tab = ExtractKeysTab()
         
@@ -101,6 +104,7 @@ class MainWindow(QMainWindow):
         self.content_stack.addWidget(self.import_tab)
         self.content_stack.addWidget(self.export_tab)
         self.content_stack.addWidget(self.compare_tab)
+        self.content_stack.addWidget(self.length_compare_tab)
         self.content_stack.addWidget(self.replace_tab)
         self.content_stack.addWidget(self.extract_keys_tab)
         
@@ -202,8 +206,9 @@ class MainWindow(QMainWindow):
             ("📥 导入多语言", 2),
             ("📤 导出多语言", 3),
             ("🔎 对比多语言", 4),
-            ("🔄 字符串替换", 5),
-            ("🔑 提取 Key", 6),
+            ("📏 长度对比", 5),
+            ("🔄 字符串替换", 6),
+            ("🔑 提取 Key", 7),
         ]
         
         for text, index in nav_items:
@@ -241,6 +246,9 @@ class MainWindow(QMainWindow):
         
         # 对比多语言
         self.compare_tab.compare_btn.clicked.connect(self.compare_languages)
+        
+        # 长度对比
+        self.length_compare_tab.compare_btn.clicked.connect(self.compare_lengths)
         
         # 字符串替换
         self.replace_tab.scan_btn.clicked.connect(self.scan_strings)
@@ -291,6 +299,7 @@ class MainWindow(QMainWindow):
         # 启用相关按钮
         self.deduplicate_tab.scan_btn.setEnabled(True)
         self.compare_tab.compare_btn.setEnabled(True)
+        self.length_compare_tab.compare_btn.setEnabled(True)
         self.replace_tab.scan_btn.setEnabled(True)
         self.export_tab.export_btn.setEnabled(True)
     
@@ -338,6 +347,7 @@ class MainWindow(QMainWindow):
             
             # 更新各个 Tab 的语言列表
             self.compare_tab.update_languages(self.languages)
+            self.length_compare_tab.update_languages(self.languages)
             self.extract_keys_tab.update_languages(self.languages)
         except Exception as e:
             print(f"更新语言列表失败: {e}")
@@ -725,3 +735,56 @@ class MainWindow(QMainWindow):
                 Toast.show_toast(self, f"✅ 已保存到 {file_path}", 2000)
             except Exception as e:
                 Toast.show_toast(self, f"保存失败: {e}", 2000)
+    
+    # ============ 长度对比相关方法 ============
+    
+    def compare_lengths(self):
+        """长度对比"""
+        if not self.project_path:
+            return
+        
+        target_languages = self.length_compare_tab.get_selected_target_languages()
+        if not target_languages:
+            Toast.show_toast(self, "请至少选择一个目标语言", 2000)
+            return
+        
+        compare_mode = self.length_compare_tab.get_compare_mode()
+        base_lang = self.length_compare_tab.get_base_lang() if compare_mode == "base_lang" else None
+        min_diff_percent = self.length_compare_tab.get_min_diff_percent()
+        
+        # 清空日志
+        self.length_compare_tab.compare_log_text.clear()
+        self.length_compare_tab.compare_log_text.append(f"开始对比，目标语言: {', '.join(target_languages)}...")
+        
+        # 禁用按钮
+        self.length_compare_tab.compare_btn.setEnabled(False)
+        
+        # 创建 Worker
+        self.length_compare_worker = LengthCompareWorker(
+            self.project_path,
+            target_languages,
+            compare_mode,
+            base_lang,
+            min_diff_percent
+        )
+        self.length_compare_worker.progress.connect(self.on_length_compare_progress)
+        self.length_compare_worker.finished.connect(self.on_length_compare_finished)
+        self.length_compare_worker.start()
+    
+    def on_length_compare_progress(self, message: str):
+        """长度对比进度更新"""
+        self.length_compare_tab.compare_log_text.append(message)
+    
+    def on_length_compare_finished(self, success: bool, message: str, results: dict):
+        """长度对比完成"""
+        self.length_compare_tab.compare_btn.setEnabled(True)
+        self.length_compare_tab.compare_log_text.append(message)
+        
+        if success:
+            self.length_compare_tab.update_results(results)
+            if results:
+                Toast.show_toast(self, f"✅ {message}", 2000)
+            else:
+                Toast.show_toast(self, "✅ 未发现变长的字段", 2000)
+        else:
+            Toast.show_toast(self, f"❌ {message}", 2000)
