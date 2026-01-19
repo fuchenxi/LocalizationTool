@@ -377,9 +377,9 @@ class LengthCompareTab(QWidget):
         
         # 结果表格
         self.result_table = QTableWidget()
-        self.result_table.setColumnCount(6)
+        self.result_table.setColumnCount(7)
         self.result_table.setHorizontalHeaderLabels([
-            "Key", "Value", "语言", "长度", "基准", "差异"
+            "Key", "英文 Value", "Value", "语言", "长度", "基准", "差异"
         ])
         self.result_table.setAlternatingRowColors(False)
         self.result_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
@@ -417,18 +417,19 @@ class LengthCompareTab(QWidget):
         
         # 设置列宽
         header = self.result_table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
-        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
-        header.setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
-        header.setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)  # Key
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)  # 英文 Value
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)  # Value
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)    # 语言
+        header.setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)    # 长度
+        header.setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)    # 基准
+        header.setSectionResizeMode(6, QHeaderView.ResizeMode.Fixed)    # 差异
         
         self.result_table.setColumnWidth(0, 150)  # Key
-        self.result_table.setColumnWidth(2, 80)   # 语言
-        self.result_table.setColumnWidth(3, 70)   # 长度
-        self.result_table.setColumnWidth(4, 70)   # 基准
-        self.result_table.setColumnWidth(5, 90)  # 差异
+        self.result_table.setColumnWidth(3, 80)   # 语言
+        self.result_table.setColumnWidth(4, 70)   # 长度
+        self.result_table.setColumnWidth(5, 70)   # 基准
+        self.result_table.setColumnWidth(6, 90)   # 差异
         
         self.result_table.setVisible(False)
         result_layout.addWidget(self.result_table)
@@ -521,7 +522,7 @@ class LengthCompareTab(QWidget):
             ws.title = "长度对比结果"
             
             # 设置表头
-            headers = ["Key", "Value", "语言", "长度", "基准", "差异%"]
+            headers = ["Key", "英文 Value", "Value", "语言", "长度", "基准", "差异%"]
             ws.append(headers)
             
             # 设置表头样式
@@ -544,8 +545,21 @@ class LengthCompareTab(QWidget):
                 
                 diff_percent = data['diff_percent']
                 
+                # 获取英文 Value
+                en_value = ""
+                if 'all_values' in data:
+                    # 优先查找 'en'，如果没有则查找以 'en' 开头的语言代码
+                    if 'en' in data['all_values']:
+                        en_value = data['all_values']['en']['value']
+                    else:
+                        for lang_code in data['all_values'].keys():
+                            if lang_code.startswith('en'):
+                                en_value = data['all_values'][lang_code]['value']
+                                break
+                
                 row = [
                     data['key'],
+                    en_value,
                     data['target_value'],
                     data['target_lang'],
                     data['target_length'],
@@ -555,7 +569,7 @@ class LengthCompareTab(QWidget):
                 ws.append(row)
                 
                 # 设置差异列的颜色（根据严重程度）
-                diff_cell = ws.cell(row=ws.max_row, column=6)
+                diff_cell = ws.cell(row=ws.max_row, column=7)
                 if diff_percent >= 100:
                     diff_cell.fill = PatternFill(start_color="FFEBEE", end_color="FFEBEE", fill_type="solid")
                     diff_cell.font = Font(bold=True, color="FF3B30")
@@ -570,18 +584,19 @@ class LengthCompareTab(QWidget):
             
             # 设置列宽
             ws.column_dimensions['A'].width = 30  # Key
-            ws.column_dimensions['B'].width = 40  # Value
-            ws.column_dimensions['C'].width = 12  # 语言
-            ws.column_dimensions['D'].width = 10  # 长度
-            ws.column_dimensions['E'].width = 10  # 基准
-            ws.column_dimensions['F'].width = 12  # 差异%
+            ws.column_dimensions['B'].width = 40  # 英文 Value
+            ws.column_dimensions['C'].width = 40  # Value
+            ws.column_dimensions['D'].width = 12  # 语言
+            ws.column_dimensions['E'].width = 10  # 长度
+            ws.column_dimensions['F'].width = 10  # 基准
+            ws.column_dimensions['G'].width = 12  # 差异%
             
             # 设置数据行对齐和格式
             for row in ws.iter_rows(min_row=2, max_row=ws.max_row):
                 for col_num, cell in enumerate(row, 1):
-                    if col_num in [3, 4, 5, 6]:  # 语言、长度、基准、差异列居中
+                    if col_num in [4, 5, 6, 7]:  # 语言、长度、基准、差异列居中
                         cell.alignment = Alignment(horizontal="center", vertical="center")
-                    elif col_num == 2:  # Value 列左对齐，自动换行
+                    elif col_num in [2, 3]:  # 英文 Value 和 Value 列左对齐，自动换行
                         cell.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
                     elif col_num == 1:  # Key 列左对齐
                         cell.alignment = Alignment(horizontal="left", vertical="center")
@@ -650,23 +665,42 @@ class LengthCompareTab(QWidget):
             key_item = QTableWidgetItem(data['key'])
             self.result_table.setItem(row, 0, key_item)
             
-            # Value（预览，最多显示80个字符）
+            # 英文 Value（从 all_values 中获取）
+            en_value = ""
+            if 'all_values' in data:
+                # 优先查找 'en'，如果没有则查找以 'en' 开头的语言代码
+                if 'en' in data['all_values']:
+                    en_value = data['all_values']['en']['value']
+                else:
+                    for lang_code in data['all_values'].keys():
+                        if lang_code.startswith('en'):
+                            en_value = data['all_values'][lang_code]['value']
+                            break
+            
+            en_value_preview = en_value
+            if len(en_value_preview) > 80:
+                en_value_preview = en_value_preview[:80] + "..."
+            en_value_item = QTableWidgetItem(en_value_preview)
+            en_value_item.setToolTip(en_value)  # 完整内容在 tooltip 中
+            self.result_table.setItem(row, 1, en_value_item)
+            
+            # Value（目标语言的 value）
             value_preview = data['target_value']
             if len(value_preview) > 80:
                 value_preview = value_preview[:80] + "..."
             value_item = QTableWidgetItem(value_preview)
-            value_item.setToolTip(data['target_value'])  # 完整内容在 tooltip 中
-            self.result_table.setItem(row, 1, value_item)
+            value_item.setToolTip(data['target_value'])
+            self.result_table.setItem(row, 2, value_item)
             
             # 语言
             lang_item = QTableWidgetItem(data['target_lang'])
             lang_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            self.result_table.setItem(row, 2, lang_item)
+            self.result_table.setItem(row, 3, lang_item)
             
             # 长度
             len_item = QTableWidgetItem(str(data['target_length']))
             len_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            self.result_table.setItem(row, 3, len_item)
+            self.result_table.setItem(row, 4, len_item)
             
             # 基准
             base_len = data['base_length']
@@ -677,7 +711,7 @@ class LengthCompareTab(QWidget):
             base_item = QTableWidgetItem(base_str)
             base_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             base_item.setForeground(QBrush(QColor("#8E8E93")))
-            self.result_table.setItem(row, 4, base_item)
+            self.result_table.setItem(row, 5, base_item)
             
             # 差异（根据严重程度着色）
             diff_percent = data['diff_percent']
@@ -696,7 +730,7 @@ class LengthCompareTab(QWidget):
             font = QFont()
             font.setBold(True)
             diff_item.setFont(font)
-            self.result_table.setItem(row, 5, diff_item)
+            self.result_table.setItem(row, 6, diff_item)
         
         # 行高
         for i in range(len(self.sorted_results)):
